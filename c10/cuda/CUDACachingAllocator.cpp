@@ -1975,8 +1975,10 @@ class DeviceCachingAllocator {
         block_found = try_mempool_fallback(
             params, size, stream, device_id, alloc_size, stats);
 
-        // Free enough available cached blocks to satisfy alloc and retry.
-        if (!block_found &&
+        // Free enough available cached blocks to satisfy alloc and retry. Like
+        // release_cached_blocks below, not during graph capture: freeing a
+        // segment (cudaFree or a custom allocator's free) invalidates it.
+        if (!block_found && C10_LIKELY(!is_capture_context()) &&
             release_available_cached_blocks(params, context, lock)) {
           block_found = alloc_block(params, false, context, lock);
         }
