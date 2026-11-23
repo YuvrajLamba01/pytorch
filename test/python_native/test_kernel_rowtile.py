@@ -72,6 +72,47 @@ class TestKernelRowTile(TestCase):
             f"expected ONE compiled kernel for the vec class, got {sorted(mine)}",
         )
 
+    @unittest.skipIf(
+        torch.cuda.device_count() < 2 or torch.cuda.get_device_capability(1)[0] < 9,
+        "requires a second Hopper+ CUDA device",
+    )
+    def test_plans_are_keyed_by_device(self):
+        trait = T.SumOps(acc=cutlass.Float32)
+        rt._CACHE.clear()
+        for device in ("cuda:0", "cuda:1"):
+            x = torch.randn(64, 512, device=device)
+            with torch.cuda.device(x.device):
+                (out,) = rt.reduce_row_tile(
+                    trait, "bydevice", x, [torch.float32], order="linear"
+                )
+            torch.testing.assert_close(
+                out, x.double().sum(dim=1).float(), atol=1e-5, rtol=1e-5
+            )
+        # Row-tile keys end their fixed fields with the device index.
+        mine = [k for k in rt._CACHE if "bydevice" in k]
+        self.assertEqual(sorted(k[5] for k in mine), [0, 1])
+
+    @unittest.skipIf(torch.cuda.device_count() < 2, "requires 2 CUDA devices")
+    def test_launchers_reject_a_non_current_device(self):
+        # Both entry points check before compiling, so nothing is cached.
+        x = torch.randn(64, 512, device="cuda:1")
+        trait = T.SumOps(acc=cutlass.Float32)
+        out = torch.empty(x.shape[0], device=x.device)
+        self.assertIsNotNone(rt.itree_plan(x.shape[1], x.shape[0], x.element_size()))
+        before = set(rt._CACHE)
+        with torch.cuda.device(0):
+            with self.assertRaisesRegex(AssertionError, "is current"):
+                rt.reduce_row_tile(trait, "off", x, [torch.float32], order="linear")
+            with self.assertRaisesRegex(AssertionError, "is current"):
+                rt.reduce_row_itree(trait, "off", x, out)
+        self.assertEqual(set(rt._CACHE), before)
+
+    def test_itree_output_shares_the_input_device(self):
+        x = torch.randn(64, 512, device="cuda")
+        trait = T.SumOps(acc=cutlass.Float32)
+        with self.assertRaisesRegex(AssertionError, "out on cpu"):
+            rt.reduce_row_itree(trait, "off_out", x, torch.empty(64))
+
     def test_two_output_trait(self):
         # nouts=2 stores values and indices projected from one accumulator.
         x = torch.randn(64, 512, device="cuda")
