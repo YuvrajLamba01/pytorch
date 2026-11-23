@@ -635,7 +635,7 @@ class TestGroupBatchFusion(TestCase):
         self.assertEqual(default["devices"], ("xpu",))
         self.assertEqual(default["min_fuse_set_size"], 2)
         self.assertTrue(default["static_widths_only"])
-        self.assertEqual(default["max_fuse_tensor_bytes"], 4 << 20)
+        self.assertEqual(default["max_fuse_tensor_bytes_batch_linear_lhs"], 4 << 20)
 
         class M(torch.nn.Module):
             def __init__(self):
@@ -671,7 +671,7 @@ class TestGroupBatchFusion(TestCase):
         self.assertTrue(_option_matches_graph_devices({"devices": {"xpu"}}, {"xpu"}))
         # Explicit None keeps the option on; invalid values are rejected.
         self.assertTrue(_option_matches_graph_devices({"devices": None}, {"cuda"}))
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "devices must be"):
             _option_matches_graph_devices({"devices": 7}, {"cuda"})
 
     @requires_gpu()
@@ -757,7 +757,7 @@ class TestGroupBatchFusion(TestCase):
             self.assertEqual(counters["inductor"]["batch_linear_lhs"], expected_count)
         counters.clear()
 
-    @parametrize("max_fuse_tensor_bytes,expected_count", [(1024, 0), (20000, 1)])
+    @parametrize("max_fuse_tensor_bytes,expected_count", [(12287, 0), (12288, 1)])
     def test_batch_linear_lhs_respects_max_fuse_tensor_bytes(
         self, max_fuse_tensor_bytes, expected_count
     ):
@@ -774,7 +774,7 @@ class TestGroupBatchFusion(TestCase):
                 "batch_linear_lhs": {
                     "devices": ("cpu",),
                     "min_fuse_set_size": 2,
-                    "max_fuse_tensor_bytes": max_fuse_tensor_bytes,
+                    "max_fuse_tensor_bytes_batch_linear_lhs": max_fuse_tensor_bytes,
                 }
             },
         ):

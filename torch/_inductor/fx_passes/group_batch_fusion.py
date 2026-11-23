@@ -54,8 +54,6 @@ MAX_FUSE_SET_SIZE = 300
 MAX_FUSE_SEARCH_DEPTH = 5
 # The maximum tensor size that can go into the fusion group
 MAX_FUSE_TENSOR_SIZE_GROUP_LINEAR = 4096
-# Maximum number of bytes in the concatenated weights of batch_linear_lhs.
-MAX_FUSE_TENSOR_BYTES_BATCH_LINEAR_LHS = 4 << 20
 # Whether we only fuse nodes with same parent node
 FUSE_NODES_WITH_SAME_PARENT = False
 # Whether we enable the add broadcast in batch linear
@@ -73,7 +71,6 @@ default_graph_search_options = {
     "max_fuse_set_size": MAX_FUSE_SET_SIZE,
     "max_fuse_search_depth": MAX_FUSE_SEARCH_DEPTH,
     "max_fuse_tensor_size_group_linear": MAX_FUSE_TENSOR_SIZE_GROUP_LINEAR,
-    "max_fuse_tensor_bytes": MAX_FUSE_TENSOR_BYTES_BATCH_LINEAR_LHS,
     "fuse_nodes_with_same_parent": FUSE_NODES_WITH_SAME_PARENT,
     "shape_broadcast_batch_linear": SHAPE_BROADCAST_BATCH_LINEAR,
     "fuse_nodes_with_same_users": Fuse_NODES_WITH_SAME_USERS,
@@ -844,14 +841,16 @@ class BatchLinearLHSFusion(BatchFusion):
             batch_biases.append(bias)
             split_sections.append(weight.meta["val"].shape[1])  # type: ignore[union-attr]
 
-        max_bytes = self.graph_search_options.get("max_fuse_tensor_bytes")
+        max_bytes = self.graph_search_options.get(
+            "max_fuse_tensor_bytes_batch_linear_lhs"
+        )
         if max_bytes is not None:
             total_bytes = 0
             for weight in batch_weights:
                 value = weight.meta["val"]  # type: ignore[union-attr]
                 total_bytes += value.numel() * value.element_size()
-            if statically_known_true(total_bytes > max_bytes):
-                return
+            if not statically_known_true(total_bytes <= max_bytes):
+                return False
 
         custom_context = _common_custom_context(batch_nodes)
 
@@ -1990,7 +1989,8 @@ def apply_group_batch_fusion(graph: torch.fx.GraphModule, rule: GroupBatchFusion
             for subset in find_independent_subset_greedy(
                 candidate_nodes, rule.graph_search_options
             ):
-                rule.fuse(graph, subset)
+                if rule.fuse(graph, subset) is False:
+                    continue
                 fused_set.update(subset)
                 log.debug(
                     f"{rule.__class__.__name__}: key = {key}; subset size = {len(list(subset))}"  # noqa: G004
@@ -2078,7 +2078,7 @@ def group_batch_fusion_passes(
         for name in _PRE_GRAD_OPTIONS_FORWARDED_TO_POST_GRAD:
             if name not in config.pre_grad_fusion_options:
                 continue
-            shipped = config.DEFAULT_POST_GRAD_FUSION_OPTIONS.get(name)
+            shipped = config._DEFAULT_POST_GRAD_FUSION_OPTIONS.get(name)
             if name in post_grad_options and post_grad_options[name] != shipped:
                 warning_once(
                     log,
