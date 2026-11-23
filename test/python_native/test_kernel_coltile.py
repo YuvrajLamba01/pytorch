@@ -1332,6 +1332,8 @@ class TestOrderedColDevice(TestCase):
             plan.split[0],
             trait_type=T.SumOps,
             nfields=1,
+            nouts=1,
+            welford_outs=0,
             acc_bits=32,
             out_dtypes=tuple(outputs),
             rows=rows,
@@ -1343,6 +1345,50 @@ class TestOrderedColDevice(TestCase):
         tiles = [cfg.full_tiles and not ragged]
         self.assertEqual([f["full_tiles"] for f in ops], tiles)
         want, _ = self._reduce(device, trait, key, x, 0, outputs, route=False)
+        self._assert_bitwise(got, want)
+
+    @parametrize(
+        "key,dtype,rows,cols,width",
+        [
+            ("var0", torch.float32, 65536, 1024, 16),
+            ("var0", torch.bfloat16, 32768, 256, 16),
+            ("argmaxi32", torch.float32, 65536, 256, 16),
+            ("var0", torch.bfloat16, 8192, 1024, 16),
+        ],
+        name_fn=lambda key, dt, r, c, w: f"{key}_{str(dt)[6:]}_{r}x{c}",
+    )
+    @largeTensorTest("1GB", device="cuda")
+    def test_sm107_mappings_match_the_indexed_tree(
+        self, device, key, dtype, rows, cols, width
+    ):
+        """Run SM107's ordered mappings, forced by cc on any device, bitwise equal to the
+        indexed tree."""
+        x = torch.randn(rows, cols, device=device, dtype=dtype)
+        self._assert_sm107_mapping(x, key, width)
+
+    @largeTensorTest("4GB", device="cuda")
+    def test_sm107_2gib_mapping_matches_the_indexed_tree(self, device):
+        """Run the 2 GiB C = 4096 view select_col_config hands off, as above."""
+        x = torch.randn(262144, 4096, device=device, dtype=torch.bfloat16)
+        self._assert_sm107_mapping(x, "argmaxi32", 32)
+
+    def _assert_sm107_mapping(self, x, key, width):
+        (rows, cols), dtype = x.shape, x.dtype
+        if key == "var0":
+            trait, outputs = T.WelfordOps(correction=0), [dtype]
+        else:
+            trait, outputs = T.ArgMaxOps(), [torch.int64]
+        for k in [k for k in ct._CACHE if k[1:3] == (key, dtype)]:
+            del ct._CACHE[k]
+        got = ct.reduce_ordered_col(trait, key, x, outputs, 1, cc=(10, 7))
+        self.assertIsNotNone(got)
+        ops = [_ordered_fields(k) for k in ct._CACHE if k[1:3] == (key, dtype)]
+        mapped = {(f["workers"], f["tile_columns"], f["full_tiles"]) for f in ops}
+        self.assertEqual(mapped, {(16, width, True)})
+        want = kg._try_indexed_itree(
+            trait, key + "_ref", x, [(rows, cols)], [(cols, 1)], cols, rows, outputs, 1
+        )
+        self.assertIsNotNone(want)
         self._assert_bitwise(got, want)
 
     @parametrize(
@@ -1482,6 +1528,8 @@ class TestOrderedColDevice(TestCase):
                     plan.split[0],
                     trait_type=T.MeanOps,
                     nfields=mean.nfields,
+                    nouts=1,
+                    welford_outs=0,
                     acc_bits=32,
                     out_dtypes=tuple(f32),
                     rows=rows,

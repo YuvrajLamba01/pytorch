@@ -48,6 +48,8 @@ class TestColumnConfig(TestCase):
             acc_bits=32,
             nouts=1,
             welford_outs=0,
+            alignment=16,
+            out_dtypes=(torch.float32,),
         )
         args.update(kwargs)
         return ct.select_col_config(**args)
@@ -84,11 +86,14 @@ class TestColumnConfig(TestCase):
             # Two-wide vectors make 2048 lanes, which want 64 partitions, not 128.
             ({"vec": 2}, "explicit", (64, 2)),
         ],
+        name_fn=lambda kw, r, g: "_".join(f"{k}_{v}" for k, v in kw.items()),
     )
-    def test_explicit_geometry_disables_policy(self, kwargs, rule, geometry):
-        """Honor explicit stage-one geometry without rewriting it through policy, and
-        derive the free field from the explicit one."""
-        cfg = self.select(**kwargs)
+    @parametrize("cc", [(10, 3), (10, 7)], name_fn=lambda cc: f"sm{cc[0]}{cc[1]}")
+    def test_explicit_geometry_disables_policy(self, cc, kwargs, rule, geometry):
+        """Honor explicit column geometry without rewriting it through policy, even at
+        SM107's rubin_sum_c4096_tiled anchor, and derive the free field from the explicit
+        one."""
+        cfg = self.select(cc=cc, **kwargs)
         self.assertEqual(cfg.rule, rule)
         self.assertEqual((cfg.npar, cfg.vec), geometry)
         for key, value in kwargs.items():
