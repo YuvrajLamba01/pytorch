@@ -4717,9 +4717,6 @@ class SIMDScheduling(BaseScheduling):
             # ConditionalMultiKernel emits Triton launches.
             "a non-Triton backend"
             if not isinstance(self, TritonScheduling)
-            # TODO: remove to cover all kernels, with tests for them.
-            else "a non-reduction kernel"
-            if not kernel_features.is_reduction()
             # TODO: support the cpp and FX wrappers (they cannot emit the conditional
             # launch yet).
             else "the cpp wrapper"
