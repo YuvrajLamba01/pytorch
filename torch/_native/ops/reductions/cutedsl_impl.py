@@ -7,7 +7,9 @@ registered separately because structured delegation occurs below the dispatcher.
 Eligibility mirrors the former ``try_inner_tree_reduction``: TensorIterator must
 coalesce the input to one contiguous reduced dimension and at most one outer
 dimension. Unsupported geometry, dtype conversion, and integer or complex inputs
-fall through to ATen.
+fall through to the next registration: the CuTeDSL reduction overrides
+(``overrides.py``) for ``sum.dim_IntList`` and ``prod.dim_int``, then ATen if those
+decline too, and ATen directly for the ``out=`` overloads.
 
 Accepted calls canonicalize to ``(M, N)``. The ordered adapter uses the shared
 fixed-DAG kernel with dynamic input and output row strides.
@@ -192,7 +194,10 @@ def _out_cond(self, dim, keepdim=False, *, dtype=None, out) -> bool:
     out_kd = _out_keepdim_view(self, d, keepdim, out)
     if out_kd is None:
         return False
-    return _eligibility(self, d, out_kd) is not None
+    # Probe a fresh tensor of out's geometry: TensorIterator takes its outputs'
+    # mutable data pointers, which would materialize a copy-on-write out.
+    probe = out_kd.new_empty_strided(out_kd.shape, out_kd.stride())
+    return _eligibility(self, d, probe) is not None
 
 
 def _sum_into():
